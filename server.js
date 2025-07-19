@@ -1,46 +1,59 @@
-const express = require('express');
-const http = require('http');
-const WebSocket = require('ws');
+const express = require("express");
+const http = require("http");
+const WebSocket = require("ws");
+const path = require("path");
+
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-const rooms = {};
+const rooms = {}; // roomId -> [ws, ws]
 
-wss.on('connection', socket => {
-  socket.on('message', message => {
-    const data = JSON.parse(message);
-    const { roomId } = data;
+wss.on("connection", (ws) => {
+  ws.on("message", (message) => {
+    let data;
+    try {
+      data = JSON.parse(message);
+    } catch (e) {
+      console.error("Invalid JSON", e);
+      return;
+    }
 
-    if (data.type === 'join') {
-      if (!rooms[roomId]) rooms[roomId] = [];
-      rooms[roomId].push(socket);
-      socket.roomId = roomId;
+    const { type, room, payload } = data;
 
-      if (rooms[roomId].length === 2) {
-        rooms[roomId].forEach(s => s.send(JSON.stringify({ type: 'ready' })));
+    if (type === "join") {
+      if (!rooms[room]) rooms[room] = [];
+      rooms[room].push(ws);
+      ws.room = room;
+
+      // Notify the other peer someone joined
+      if (rooms[room].length === 2) {
+        rooms[room][0].send(JSON.stringify({ type: "ready" }));
+        rooms[room][1].send(JSON.stringify({ type: "ready" }));
       }
     }
 
-    if (data.type === 'signal') {
-      rooms[roomId]
-        .filter(s => s !== socket)
-        .forEach(s => s.send(JSON.stringify({ type: 'signal', signal: data.signal })));
+    if (type === "signal") {
+      const peers = rooms[room];
+      if (peers) {
+        peers.forEach((client) => {
+          if (client !== ws && client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify({ type: "signal", payload }));
+          }
+        });
+      }
     }
   });
 
-  socket.on('close', () => {
-    const room = rooms[socket.roomId];
-    if (room) {
-      rooms[socket.roomId] = room.filter(s => s !== socket);
-      room.forEach(s => s.send(JSON.stringify({ type: 'leave' })));
+  ws.on("close", () => {
+    if (ws.room && rooms[ws.room]) {
+      rooms[ws.room] = rooms[ws.room].filter((client) => client !== ws);
     }
   });
 });
 
-app.use(express.static('public'));
+app.use(express.static(path.join(__dirname, "public")));
 
-
-app.listen(3001, '0.0.0.0', () => {
-  console.log("Server running on port 3001");
+server.listen(3000, () => {
+  console.log("Server running on http://localhost:3000");
 });
